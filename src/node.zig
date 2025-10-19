@@ -6,7 +6,7 @@ fn randTimeout() u64 {
 
 const Role = enum { Follower, Candidate, Leader };
 
-const LogEntry = struct { term: u32, command: []const u8 };
+pub const LogEntry = struct { index: u32, term: u32, command: []const u8 };
 
 pub const Node = struct {
     id: u32,
@@ -35,29 +35,11 @@ pub const Node = struct {
         return now - self.lastHeartbeatTime >= self.electionTimeout;
     }
 
-    pub fn appendLog(self: *Node, term: u32, command: []const u8) !void {
-        const entry = LogEntry{
-            .term = term,
-            .command = command,
-        };
-        try self.log.append(self.allocator, entry);
-    }
-
     pub fn applyCommitted(self: *Node) void {
         while (self.lastApplied < self.commitIndex) : (self.lastApplied += 1) {
             const entry = self.log.items[self.lastApplied];
-            std.debug.print("Applying log[{}]: {s}\n", .{ self.lastApplied, entry.command });
+            std.debug.print("Node {d} applying log[{}]: {s}\n", .{ self.id, self.lastApplied, entry.command });
         }
-    }
-
-    pub fn heartbeat(self: *Node, leaderId: u32, leaderTerm: u32, now: i64) void {
-        if (leaderTerm >= self.currentTerm) {
-            self.role = .Follower;
-            self.currentTerm = leaderTerm;
-            self.votedFor = null;
-        }
-        self.lastHeartbeatTime = now;
-        std.debug.print("Follower {d} got heartbeat from Leader {d}\n", .{ self.id, leaderId });
     }
 
     pub fn requestVote(self: *Node, candidateTerm: u32, candidateId: u32, candidateLastLogIndex: u32, candidateLastLogTerm: u32, now: i64) bool {
@@ -85,5 +67,38 @@ pub const Node = struct {
         std.debug.assert(self.role == .Candidate);
         self.role = .Leader;
         std.debug.print("Node {d} transitioning to leader\n", .{self.id});
+    }
+
+    // leader
+    pub fn handleClientCommand(self: *Node, entry: LogEntry) !void {
+        std.debug.print("Leader {d} received client command: {s}\n", .{ self.id, entry.command });
+        try self.log.append(self.allocator, entry);
+    }
+
+    // follower
+    pub fn appendEntries(self: *Node, leaderId: u32, leaderTerm: u32, leaderCommitIndex: u32, entries: []const LogEntry, now: i64) !bool {
+        if (leaderTerm > self.currentTerm) {
+            self.currentTerm = leaderTerm;
+            self.role = .Follower;
+            self.votedFor = null;
+        }
+        self.lastHeartbeatTime = now;
+        for (entries) |entry| {
+            if (entry.index != self.log.items.len) {
+                // out of sync
+                return false;
+            }
+            try self.log.append(self.allocator, entry);
+        }
+        if (leaderCommitIndex > self.commitIndex) {
+            self.commitIndex = @min(leaderCommitIndex, self.log.items.len);
+            self.applyCommitted();
+        }
+        if (entries.len == 0) {
+            std.debug.print("Follower {d} got heartbeat from Leader {d}\n", .{ self.id, leaderId });
+        } else {
+            std.debug.print("Follower {d} appended {d} entries from Leader {d}\n", .{ self.id, entries.len, leaderId });
+        }
+        return true;
     }
 };

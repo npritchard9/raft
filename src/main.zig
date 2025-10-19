@@ -6,7 +6,7 @@ const Cluster = @import("cluster.zig").Cluster;
 pub fn main() !void {
     var cluster = try Cluster.new();
     while (true) {
-        cluster.tick();
+        try cluster.tick();
         cluster.printState();
         std.posix.nanosleep(0, 150000000);
     }
